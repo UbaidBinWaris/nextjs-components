@@ -16,7 +16,9 @@
 # next.js
 /.next/
 /out/
-
+/public/uploads/
+/.upload-state/
+/uploads/
 # production
 /build
 
