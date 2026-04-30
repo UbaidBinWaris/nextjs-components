@@ -78,6 +78,11 @@ export interface UploadRouteConfig {
   maxFileSizeBytes?: number;
   chunkSizeBytes: number;
   allowedMimeTypes?: string[];
+  maxRequestsPerMinute: number;
+  sessionTtlSeconds: number;
+  enforceOriginCheck: boolean;
+  requireAccessToken: boolean;
+  accessToken?: string;
 }
 
 export interface UploadSessionSummary {

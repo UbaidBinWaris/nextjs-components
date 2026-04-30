@@ -9,6 +9,7 @@ import { UploadFileList } from '@/app/file_upload/components/upload-file-list';
 
 export interface FileUploadProps {
   readonly endpoint: string;
+  readonly accessToken?: string;
   readonly maxFileSize?: number;
   readonly allowedTypes?: string[];
   readonly multiple?: boolean;
@@ -17,6 +18,7 @@ export interface FileUploadProps {
 
 export function FileUpload({
   endpoint,
+  accessToken,
   maxFileSize,
   allowedTypes,
   multiple = true,
@@ -26,6 +28,7 @@ export function FileUpload({
   const [isDragging, setIsDragging] = useState(false);
   const { activeItems, completedItems, uploadFiles, removeItem, clearAll } = useUpload({
     endpoint,
+    accessToken,
     maxFileSize,
     allowedTypes,
     multiple,

@@ -43,6 +43,7 @@ export interface UploadItem {
 
 interface UseUploadOptions {
   endpoint: string;
+  accessToken?: string;
   maxFileSize?: number;
   allowedTypes?: string[];
   multiple?: boolean;
@@ -111,12 +112,20 @@ function createItemFromMetadata(metadata: UploadFileMetadata): UploadItem {
 async function initializeUploadSession(
   endpoint: string,
   file: File,
+  accessToken?: string,
 ): Promise<{ uploadId: string; chunkSizeBytes: number; totalChunks: number }> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+  };
+
+  if (accessToken) {
+    headers.authorization = `Bearer ${accessToken}`;
+    headers['x-upload-access-token'] = accessToken;
+  }
+
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       fileName: file.name,
       size: file.size,
@@ -132,8 +141,17 @@ async function initializeUploadSession(
   return payload;
 }
 
-async function fetchUploadState(endpoint: string): Promise<UploadListSuccessResponse> {
-  const response = await fetch(endpoint, { method: 'GET' });
+async function fetchUploadState(endpoint: string, accessToken?: string): Promise<UploadListSuccessResponse> {
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers.authorization = `Bearer ${accessToken}`;
+    headers['x-upload-access-token'] = accessToken;
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'GET',
+    headers,
+  });
   const payload = (await response.json()) as UploadListResponse;
 
   if (!response.ok || !payload.success) {
@@ -146,13 +164,14 @@ async function fetchUploadState(endpoint: string): Promise<UploadListSuccessResp
 function uploadChunkRequest(options: {
   endpoint: string;
   uploadId: string;
+  accessToken?: string;
   chunk: Blob;
   chunkIndex: number;
   itemId: string;
   requestsRef: { current: Map<string, XMLHttpRequest> };
   onProgress: (loaded: number) => void;
 }): Promise<UploadChunkResponse & { success: true }> {
-  const { endpoint, uploadId, chunk, chunkIndex, itemId, requestsRef, onProgress } = options;
+  const { endpoint, uploadId, accessToken, chunk, chunkIndex, itemId, requestsRef, onProgress } = options;
 
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
@@ -163,6 +182,10 @@ function uploadChunkRequest(options: {
     request.setRequestHeader('content-type', 'application/octet-stream');
     request.setRequestHeader('x-upload-id', uploadId);
     request.setRequestHeader('x-chunk-index', String(chunkIndex));
+    if (accessToken) {
+      request.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+      request.setRequestHeader('x-upload-access-token', accessToken);
+    }
 
     request.upload.addEventListener('progress', (event) => {
       if (!event.lengthComputable) {
@@ -200,12 +223,19 @@ function uploadChunkRequest(options: {
   });
 }
 
-async function finalizeUpload(endpoint: string, uploadId: string): Promise<UploadFileMetadata> {
+async function finalizeUpload(endpoint: string, uploadId: string, accessToken?: string): Promise<UploadFileMetadata> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+  };
+
+  if (accessToken) {
+    headers.authorization = `Bearer ${accessToken}`;
+    headers['x-upload-access-token'] = accessToken;
+  }
+
   const response = await fetch(endpoint, {
     method: 'PUT',
-    headers: {
-      'content-type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({ uploadId }),
   });
   const payload = (await response.json()) as UploadApiResponse;
@@ -217,14 +247,21 @@ async function finalizeUpload(endpoint: string, uploadId: string): Promise<Uploa
   return payload.files[0];
 }
 
-async function abortUploadOnServer(endpoint: string, uploadId?: string): Promise<void> {
+async function abortUploadOnServer(endpoint: string, uploadId?: string, accessToken?: string): Promise<void> {
   if (!uploadId) {
     return;
+  }
+
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers.authorization = `Bearer ${accessToken}`;
+    headers['x-upload-access-token'] = accessToken;
   }
 
   try {
     const response = await fetch(`${endpoint}?uploadId=${encodeURIComponent(uploadId)}`, {
       method: 'DELETE',
+      headers,
     });
     const payload = (await response.json()) as UploadAbortResponse;
     if (!response.ok || !payload.success) {
@@ -266,11 +303,12 @@ function mergeRestoredItems(current: UploadItem[], restored: UploadItem[]): Uplo
 
 function uploadFileRequest(options: {
   endpoint: string;
+  accessToken?: string;
   item: UploadItem;
   requestsRef: { current: Map<string, XMLHttpRequest> };
   setItemState: (id: string, patch: Partial<UploadItem>) => void;
 }): Promise<UploadFileMetadata> {
-  const { endpoint, item, requestsRef, setItemState } = options;
+  const { endpoint, accessToken, item, requestsRef, setItemState } = options;
 
   return (async () => {
     if (!item.file) {
@@ -285,7 +323,7 @@ function uploadFileRequest(options: {
     let uploadedChunkIndexes = [...item.uploadedChunkIndexes];
 
     if (!uploadId || !chunkSizeBytes || !totalChunks) {
-      const init = await initializeUploadSession(endpoint, file);
+      const init = await initializeUploadSession(endpoint, file, accessToken);
       uploadId = init.uploadId;
       chunkSizeBytes = init.chunkSizeBytes;
       totalChunks = init.totalChunks;
@@ -337,6 +375,7 @@ function uploadFileRequest(options: {
         const response = await uploadChunkRequest({
           endpoint,
           uploadId,
+          accessToken,
           chunk,
           chunkIndex,
           itemId: item.id,
@@ -356,7 +395,7 @@ function uploadFileRequest(options: {
 
     try {
       await Promise.all(Array.from({ length: workerCount }, () => worker()));
-      const metadata = await finalizeUpload(endpoint, uploadId);
+      const metadata = await finalizeUpload(endpoint, uploadId, accessToken);
       setItemState(item.id, {
         status: 'completed',
         progress: 100,
@@ -383,6 +422,7 @@ function uploadFileRequest(options: {
 
 export function useUpload({
   endpoint,
+  accessToken,
   maxFileSize,
   allowedTypes,
   multiple = true,
@@ -401,7 +441,7 @@ export function useUpload({
 
     const restore = async () => {
       try {
-        const state = await fetchUploadState(endpoint);
+        const state = await fetchUploadState(endpoint, accessToken);
         if (cancelled) {
           return;
         }
@@ -422,7 +462,7 @@ export function useUpload({
     return () => {
       cancelled = true;
     };
-  }, [endpoint]);
+  }, [accessToken, endpoint]);
 
   const updateItem = useCallback((id: string, updater: (item: UploadItem) => UploadItem) => {
     setItems((current) => current.map((item) => (item.id === id ? updater(item) : item)));
@@ -437,8 +477,8 @@ export function useUpload({
 
   const uploadSingleFile = useCallback(
     (item: UploadItem): Promise<UploadFileMetadata> =>
-      uploadFileRequest({ endpoint, item, requestsRef, setItemState }),
-    [endpoint, setItemState],
+      uploadFileRequest({ endpoint, accessToken, item, requestsRef, setItemState }),
+    [accessToken, endpoint, setItemState],
   );
 
   const uploadFiles = useCallback(
@@ -547,22 +587,22 @@ export function useUpload({
     });
 
     if (uploadItem?.status !== 'completed') {
-      void abortUploadOnServer(endpoint, uploadItem?.uploadId);
+      void abortUploadOnServer(endpoint, uploadItem?.uploadId, accessToken);
     }
 
     setItems((current) => current.filter((item) => item.id !== id));
-  }, [endpoint]);
+  }, [accessToken, endpoint]);
 
   const clearAll = useCallback(() => {
     requestsRef.current.forEach((request) => request.abort());
     itemsRef.current.forEach((item) => {
       if (item.status !== 'completed') {
-        void abortUploadOnServer(endpoint, item.uploadId);
+        void abortUploadOnServer(endpoint, item.uploadId, accessToken);
       }
     });
     requestsRef.current.clear();
     setItems((current) => current.filter((item) => item.status === 'completed'));
-  }, [endpoint]);
+  }, [accessToken, endpoint]);
 
   useEffect(() => {
     const activeRequests = requestsRef.current;

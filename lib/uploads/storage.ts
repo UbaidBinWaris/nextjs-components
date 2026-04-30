@@ -98,15 +98,25 @@ export class LocalDiskUploadStorage implements UploadStorageProvider {
   async listActiveUploads(): Promise<UploadSessionSummary[]> {
     try {
       const files = await readdir(this.config.sessionDirectory);
-      const sessions = await Promise.all(
-        files
-          .filter((fileName) => fileName.endsWith('.json'))
-          .map(async (fileName) => {
-            const uploadId = fileName.replace(/\.json$/, '');
-            const session = await this.readSession(uploadId);
-            return this.toSessionSummary(session);
-          }),
-      );
+      const sessions: UploadSessionSummary[] = [];
+
+      for (const fileName of files) {
+        if (!fileName.endsWith('.json')) {
+          continue;
+        }
+
+        const uploadId = fileName.replace(/\.json$/, '');
+
+        try {
+          const session = await this.readSession(uploadId);
+          sessions.push(this.toSessionSummary(session));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '';
+          if (message !== 'Upload session expired.') {
+            throw error;
+          }
+        }
+      }
 
       return sessions.sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt));
     } catch (error) {
@@ -185,7 +195,14 @@ export class LocalDiskUploadStorage implements UploadStorageProvider {
 
   private async readSession(uploadId: string): Promise<UploadSession> {
     const raw = await readFile(this.getSessionFilePath(uploadId), 'utf8');
-    return JSON.parse(raw) as UploadSession;
+    const session = JSON.parse(raw) as UploadSession;
+
+    if (this.isSessionExpired(session)) {
+      await this.abortUpload(uploadId);
+      throw new Error('Upload session expired.');
+    }
+
+    return session;
   }
 
   private async writeSession(session: UploadSession): Promise<void> {
@@ -236,5 +253,15 @@ export class LocalDiskUploadStorage implements UploadStorageProvider {
         controller.close();
       },
     });
+  }
+
+  private isSessionExpired(session: UploadSession): boolean {
+    const uploadedAtEpoch = new Date(session.uploadedAt).getTime();
+    if (!Number.isFinite(uploadedAtEpoch)) {
+      return true;
+    }
+
+    const expiresAt = uploadedAtEpoch + this.config.sessionTtlSeconds * 1000;
+    return Date.now() > expiresAt;
   }
 }
